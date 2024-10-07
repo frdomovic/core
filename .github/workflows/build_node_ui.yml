@@ -64,9 +64,6 @@ jobs:
         run: |
           cd ./node-ui
           pnpm build
-          git add -A
-          git commit -m "Automated push of node-ui build"
-          git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
      
