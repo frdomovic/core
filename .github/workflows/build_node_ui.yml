@@ -1,10 +1,10 @@
 name: Build and Commit node-ui
 
 on:
-  workflow_dispatch: # Allow manual triggering of the workflow
+  workflow_dispatch:
   push:
     branches:
-      - master
+      - master  # Explicitly set to master
     paths:
       - 'node-ui/**'
   pull_request:
@@ -13,11 +13,20 @@ on:
 
 jobs:
   build_node_ui:
-    if: github.event.pull_request.merged == true || github.event_name == 'push'
+    if: github.event.pull_request.merged == true || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    env:
+      HUSKY: 0  # Disable Husky globally for this job
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for all branches and tags
+
+      - name: Print current directory
+        run: |
+          echo "Current directory: $PWD"
+          ls -la
 
       # Check if there are changes in the node-ui folder (excluding build)
       - name: Check for changes in node-ui (excluding build folder)
@@ -27,20 +36,26 @@ jobs:
           
           git fetch --unshallow || true
 
-          # Check for changes in the node-ui folder (excluding the build directory)
-          changes=$(git diff --name-only HEAD~1 HEAD -- 'node-ui' ':!node-ui/build')
-
-          if [ -n "$changes" ]; then
-            echo "Changes detected in node-ui."
+          # For workflow_dispatch, consider all files as changed
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "Workflow manually triggered. Considering all files as changed."
             echo "CHANGES_DETECTED=true" >> $GITHUB_ENV
           else
-            echo "No changes in node-ui (excluding build folder)."
+            # Check for changes in the node-ui folder (excluding the build directory)
+            changes=$(git diff --name-only HEAD~1 HEAD -- 'node-ui' ':!node-ui/build')
+
+            if [ -n "$changes" ]; then
+              echo "Changes detected in node-ui."
+              echo "CHANGES_DETECTED=true" >> $GITHUB_ENV
+            else
+              echo "No changes in node-ui (excluding build folder)."
+            fi
           fi
 
       # Conditional steps, executed only if changes were detected
       - name: Set up Node.js
         if: env.CHANGES_DETECTED == 'true'
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v3
         with:
           node-version: '20'
  
@@ -58,31 +73,42 @@ jobs:
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
-      
-      - name: Build node ui and push changes
+
+      - name: Build node ui and commit changes
         if: env.CHANGES_DETECTED == 'true'
         run: |
           cd ./node-ui
           pnpm build
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          git commit -m "Build node-ui" || echo "No changes to commit"
+          git push origin HEAD:master
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-     
+
       - name: Clone target repository
         if: env.CHANGES_DETECTED == 'true'
         run: |
           git clone https://github.com/frdomovic/admin-dashboard.git
-          
-      - name: Copy build folder to target repo
-        if: env.CHANGES_DETECTED == 'true'
-        run: |
-          mv ./admin-dashboard/.git ./node-ui/
 
-      - name: Add, commit and push changes to target repo
+      - name: Copy entire node-ui to target repo
         if: env.CHANGES_DETECTED == 'true'
         run: |
-          cd ./node-ui/
+          cp -r ./node-ui/* ./admin-dashboard/
+
+      - name: Push changes to admin-dashboard repo
+        if: env.CHANGES_DETECTED == 'true'
+        run: |
+          git clone https://github.com/frdomovic/admin-dashboard.git
+          cd admin-dashboard
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          rm -rf ./src/* # Remove all files in admin-dashboard
+          cp -r ../node-ui/src/* ./src/ # Copy all files from node-ui to admin-dashboard
+          rm -rf ./src/build # Remove the build folder
           git add -A
-          git commit -m "Automated push of node-ui changes"
+          git commit -m "Automated push of node-ui changes (excluding build)" || echo "No changes to commit"
           git push https://${{ secrets.PUSH_TOKEN }}@github.com/frdomovic/admin-dashboard.git master
         env:
           PUSH_TOKEN: ${{ secrets.PUSH_TOKEN }}
